@@ -13,12 +13,12 @@ func TestList(t *testing.T) {
 RUN echo a > /a
 RUN echo b > /b
 RUN echo c > /c`, testutil.Mirror("busybox:1.32.0"))
-	fmt.Printf(dt)
+	fmt.Println(dt)
 	tmpCtx, doneTmpCtx := testutil.NewTempContext(t, dt)
 	defer doneTmpCtx()
 
 	sh := testutil.NewDebugShell(t, tmpCtx)
-	defer sh.Close()
+	defer sh.Close(t)
 	sh.Do("ls").OutEqual(fmt.Sprintf(`Filename: "Dockerfile"
  =>   1| FROM %s
       2| RUN echo a > /a
@@ -71,12 +71,12 @@ RUN echo j
 RUN echo k
 RUN echo l
 `, testutil.Mirror("busybox:1.32.0"))
-	fmt.Printf(dt)
+	fmt.Println(dt)
 	tmpCtx, doneTmpCtx := testutil.NewTempContext(t, dt)
 	defer doneTmpCtx()
 
 	sh := testutil.NewDebugShell(t, tmpCtx)
-	defer sh.Close()
+	defer sh.Close(t)
 	sh.Do("ls").OutEqual(fmt.Sprintf(`Filename: "Dockerfile"
  =>   1| FROM %s
       2| RUN echo a

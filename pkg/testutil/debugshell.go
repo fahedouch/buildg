@@ -16,6 +16,7 @@ import (
 )
 
 const buildgPathEnv = "TEST_BUILDG_PATH"
+const BuildgTestTmpDirEnv = "TEST_BUILDG_TMP_DIR"
 
 func getBuildgBinary(t *testing.T) string {
 	buildgCmd := "buildg"
@@ -47,11 +48,27 @@ type DebugShell struct {
 	waitDone   bool
 	waitErr    error
 	waitDoneCh chan struct{}
+
+	rootDir        string
+	cleanupRootDir func() error
 }
 
 type Output struct {
 	sh     *DebugShell
 	stdout []byte
+}
+
+func (o *Output) Out() string {
+	o.sh.t.Log("stdout:\n" + string(o.stdout))
+	return string(o.stdout)
+}
+
+func (o *Output) OutNotEqual(s string) *Output {
+	o.sh.t.Log("stdout:\n" + string(o.stdout))
+	if s == string(o.stdout) {
+		o.sh.fatal(fmt.Sprintf("unexpected stdout\nmust not be:\n%s\ngot:\n%s", s, o.stdout))
+	}
+	return o
 }
 
 func (o *Output) OutEqual(s string) *Output {
@@ -79,18 +96,12 @@ func (o *Output) OutNotContains(s string) *Output {
 }
 
 type options struct {
-	opts       []string
-	env        []string
-	globalOpts []string
+	opts    []string
+	env     []string
+	rootDir string
 }
 
 type DebugShellOption func(*options)
-
-func WithGlobalOptions(globalOpts ...string) DebugShellOption {
-	return func(o *options) {
-		o.globalOpts = append(o.globalOpts, globalOpts...)
-	}
-}
 
 func WithOptions(opts ...string) DebugShellOption {
 	return func(o *options) {
@@ -104,18 +115,66 @@ func WithEnv(env ...string) DebugShellOption {
 	}
 }
 
+func WithRootDir(rootDir string) DebugShellOption {
+	return func(o *options) {
+		o.rootDir = rootDir
+	}
+}
+
+type buildgCmdOptions struct {
+	env        []string
+	globalOpts []string
+}
+
+type BuildgCmdOption func(*buildgCmdOptions)
+
+func WithGlobalOptions(globalOpts ...string) BuildgCmdOption {
+	return func(o *buildgCmdOptions) {
+		o.globalOpts = append(o.globalOpts, globalOpts...)
+	}
+}
+
+func WithBuildgCmdEnv(env ...string) BuildgCmdOption {
+	return func(o *buildgCmdOptions) {
+		o.env = env
+	}
+}
+
+func BuildgCmd(t *testing.T, args []string, opts ...BuildgCmdOption) *exec.Cmd {
+	gotOpts := buildgCmdOptions{}
+	for _, o := range opts {
+		o(&gotOpts)
+	}
+
+	buildgCmd := getBuildgBinary(t)
+	cmd := exec.Command(buildgCmd, append(append(gotOpts.globalOpts, "--debug"), args...)...)
+	cmd.Env = append(os.Environ(), gotOpts.env...)
+	return cmd
+}
+
 func NewDebugShell(t *testing.T, buildCtx string, opts ...DebugShellOption) *DebugShell {
 	gotOpts := options{}
 	for _, o := range opts {
 		o(&gotOpts)
 	}
 
-	buildgCmd := getBuildgBinary(t)
+	var cleanupRootDir func() error
+	rootDir := gotOpts.rootDir
+	if rootDir == "" {
+		tmpRoot, err := os.MkdirTemp(os.Getenv(BuildgTestTmpDirEnv), "buildg-test-tmproot")
+		if err != nil {
+			t.Fatal(err)
+		}
+		rootDir = tmpRoot
+		cleanupRootDir = func() error { return os.RemoveAll(tmpRoot) }
+	}
+	cmd := BuildgCmd(t, append(append([]string{"debug"}, gotOpts.opts...), buildCtx),
+		WithBuildgCmdEnv(gotOpts.env...),
+		WithGlobalOptions("--root="+rootDir),
+	)
+	t.Logf("executing %q with args %+v", cmd.Path, cmd.Args)
 	prompt := identity.NewID()
-	args := append(gotOpts.globalOpts, append(append([]string{"--debug", "debug"}, gotOpts.opts...), buildCtx)...)
-	t.Logf("executing %q with args %+v", buildgCmd, args)
-	cmd := exec.Command(buildgCmd, args...)
-	cmd.Env = append(append(os.Environ(), "BUILDG_PS1"+"="+prompt), gotOpts.env...)
+	cmd.Env = append(cmd.Env, "BUILDG_PS1"+"="+prompt)
 	stdinP, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -129,14 +188,16 @@ func NewDebugShell(t *testing.T, buildCtx string, opts ...DebugShellOption) *Deb
 		t.Fatal(err)
 	}
 	sh := &DebugShell{
-		t:          t,
-		cmd:        cmd,
-		stdin:      stdinP,
-		stdout:     stdout,
-		stderr:     stderr,
-		stdoutDump: stdoutDump,
-		prompt:     prompt,
-		waitDoneCh: make(chan struct{}),
+		t:              t,
+		cmd:            cmd,
+		stdin:          stdinP,
+		stdout:         stdout,
+		stderr:         stderr,
+		stdoutDump:     stdoutDump,
+		prompt:         prompt,
+		waitDoneCh:     make(chan struct{}),
+		rootDir:        rootDir,
+		cleanupRootDir: cleanupRootDir,
 	}
 	go func() {
 		err := cmd.Wait()
@@ -206,10 +267,19 @@ func (sh *DebugShell) Wait() error {
 	return sh.wait()
 }
 
-func (sh *DebugShell) Close() error {
+func (sh *DebugShell) Close(t *testing.T) error {
 	sh.Do("exit")
 	sh.cmd.Process.Kill()
-	return sh.wait()
+	retErr := sh.wait()
+	if _, err := BuildgCmd(t, []string{"prune"}, WithGlobalOptions("--root="+sh.rootDir)).Output(); err != nil {
+		retErr = err
+	}
+	if sh.cleanupRootDir != nil {
+		if err := sh.cleanupRootDir(); err != nil {
+			retErr = err
+		}
+	}
+	return retErr
 }
 
 func NewTempContext(t *testing.T, dt string) (p string, done func() error) {
@@ -225,8 +295,4 @@ func NewTempContext(t *testing.T, dt string) (p string, done func() error) {
 		return
 	}
 	return tmpCtx, func() error { return os.RemoveAll(tmpCtx) }
-}
-
-func ExecNoTTY(args string) string {
-	return "exec -i=false -t=false " + args
 }

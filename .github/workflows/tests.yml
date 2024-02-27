@@ -7,74 +7,69 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     name: Build
     steps:
-    - uses: actions/setup-go@v3
+    - uses: actions/setup-go@v5
       with:
-        go-version: '1.18.x'
-    - uses: actions/checkout@v3
+        go-version: '1.19.x'
+    - uses: actions/checkout@v4
     - name: Build all
-      run: make
+      run: |
+        make
+        ls -al ./out/buildg
+        if ldd ./out/buildg ; then echo "buildg must be static binary" ; exit 1 ; fi
 
   test:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     name: Test
     strategy:
       fail-fast: false
       matrix:
         mode: ["root", "rootless"]
-    env:
-      ROOTLESSKIT_VERSION: v1.0.1
-      SLIRP4NETNS_VERSION: v1.2.0
     steps:
-    - uses: actions/setup-go@v3
+    - uses: actions/setup-go@v5
       with:
-        go-version: '1.18.x'
-    - name: Install tools
+        go-version: '1.19.x'
+    - uses: actions/checkout@v4
+    - name: Build and install
       run: |
-        sudo curl -sSL https://github.com/rootless-containers/rootlesskit/releases/download/${{ env.ROOTLESSKIT_VERSION }}/rootlesskit-x86_64.tar.gz | sudo tar Cxzv /usr/local/bin
-        sudo curl -o /usr/local/bin/slirp4netns --fail -L https://github.com/rootless-containers/slirp4netns/releases/download/${{ env.SLIRP4NETNS_VERSION }}/slirp4netns-x86_64
-        sudo chmod +x /usr/local/bin/slirp4netns
-    - uses: actions/checkout@v3
-    - name: Build and install binaries
-      run: make && sudo make install
+        DOCKER_BUILDKIT=1 docker build --output type=tar,dest=${GITHUB_WORKSPACE}/buildg-full.tar --target out-full --platform amd64 .
+        sudo tar -C /usr/local/ -xvf ${GITHUB_WORKSPACE}/buildg-full.tar
     - name: Test
       run: |
         if [ "${{ matrix.mode }}" == "root" ] ; then
           sudo go test -v ./...
         elif [ "${{ matrix.mode }}" == "rootless" ] ; then
           mkdir -p ${GITHUB_WORKSPACE}/tmp
-          TEST_BUILDG_PATH=buildg.sh TEST_BUILDG_TMP_DIR=${GITHUB_WORKSPACE}/tmp go test -v ./...
+          TEST_BUILDG_TMP_DIR=${GITHUB_WORKSPACE}/tmp go test -v ./...
         else
           echo "unknown mode ${{ matrix.mode }}"
           exit 1
         fi
 
   linter:
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     name: Linter
     steps:
-    - uses: actions/checkout@v3
-      with:
-        fetch-depth: 1
+    - uses: actions/checkout@v4
     - name: golangci-lint
-      uses: golangci/golangci-lint-action@v2
+      uses: golangci/golangci-lint-action@v4
       with:
-        version: v1.45
+        version: v1.52
         args: --verbose
 
   project:
     name: Project Checks
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
-    - uses: actions/setup-go@v3
+    - uses: actions/setup-go@v5
       with:
-        go-version: 1.18.x
-    - uses: actions/checkout@v3
+        go-version: 1.19.x
+    - uses: actions/checkout@v4
       with:
         fetch-depth: 100
     - name: "Check DCO sign"
       run: |
-        go install github.com/vbatts/git-validation@v1.1.0
+        go install github.com/vbatts/git-validation@v1.2.0
         git-validation -v -run DCO

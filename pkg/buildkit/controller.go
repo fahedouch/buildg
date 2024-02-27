@@ -1,4 +1,4 @@
-package main
+package buildkit
 
 import (
 	"context"
@@ -20,13 +20,13 @@ import (
 
 func newDebugController() *debugController {
 	return &debugController{
-		eventCh: make(chan *registeredStatus),
+		eventCh: make(chan *RegisteredStatus),
 		pause:   make(map[string]*chan struct{}),
 	}
 }
 
 type debugController struct {
-	eventCh chan *registeredStatus
+	eventCh chan *RegisteredStatus
 	pause   map[string]*chan struct{}
 	mu      sync.Mutex
 
@@ -36,16 +36,7 @@ type debugController struct {
 	handleStarted bool
 }
 
-type location struct {
-	source *pb.SourceInfo
-	ranges []*pb.Range
-}
-
-func (l *location) String() string {
-	return fmt.Sprintf("%q %+v", l.source.Filename, l.ranges)
-}
-
-func (d *debugController) handle(ctx context.Context, handler *handler) error {
+func (d *debugController) handle(ctx context.Context, handler *Handler) error {
 	if d.handleStarted {
 		return fmt.Errorf("on going handler exists")
 	}
@@ -58,8 +49,8 @@ func (d *debugController) handle(ctx context.Context, handler *handler) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case msg := <-d.eventCh:
-			logrus.Debugf("got debug event %q", msg.debugID)
-			if locs, err := d.getLocation(msg.vertex.String()); err != nil {
+			logrus.Debugf("got debug event %q", msg.DebugID)
+			if locs, err := d.getLocation(msg.Vertex.String()); err != nil {
 				logrus.WithError(err).Debug("failed to get location info")
 			} else {
 				if err := handler.handle(ctx, msg, locs); err != nil {
@@ -69,17 +60,18 @@ func (d *debugController) handle(ctx context.Context, handler *handler) error {
 					return err
 				}
 			}
-			d.continueID(msg.debugID)
+			d.continueID(msg.DebugID)
 		}
 	}
 }
 
-func (d *debugController) addLocation(source *pb.Source) {
+func (d *debugController) addLocationSource(source *pb.Source) {
 	d.sourcesMu.Lock()
 	if d.sources == nil {
 		d.sources = make(map[*pb.Source]int)
 	}
-	if _, ok := d.sources[source]; ok {
+	_, ok := d.sources[source]
+	if ok {
 		d.sources[source]++
 	} else {
 		d.sources[source] = 1
@@ -87,7 +79,7 @@ func (d *debugController) addLocation(source *pb.Source) {
 	d.sourcesMu.Unlock()
 }
 
-func (d *debugController) deleteLocation(source *pb.Source) {
+func (d *debugController) deleteLocationSource(source *pb.Source) {
 	d.sourcesMu.Lock()
 	if _, ok := d.sources[source]; ok {
 		d.sources[source]--
@@ -98,13 +90,13 @@ func (d *debugController) deleteLocation(source *pb.Source) {
 	d.sourcesMu.Unlock()
 }
 
-func (d *debugController) getLocation(v string) (locs []*location, err error) {
+func (d *debugController) getLocation(v string) (locs []*Location, err error) {
 	d.sourcesMu.Lock()
 	defer d.sourcesMu.Unlock()
 	for s := range d.sources {
 		if locsInfo, ok := s.Locations[v]; ok {
 			for _, loc := range locsInfo.Locations {
-				locs = append(locs, &location{s.Infos[loc.SourceIndex], loc.Ranges})
+				locs = append(locs, &Location{s.Infos[loc.SourceIndex], loc.Ranges})
 			}
 		}
 	}
@@ -152,8 +144,8 @@ type debugFrontendBridge struct {
 func (f *debugFrontendBridge) Solve(ctx context.Context, req frontend.SolveRequest, sid string) (*frontend.Result, error) {
 	req.Evaluate = true
 	if req.Definition != nil && req.Definition.Source != nil {
-		f.debugController.addLocation(req.Definition.Source)
-		defer f.debugController.deleteLocation(req.Definition.Source)
+		f.debugController.addLocationSource(req.Definition.Source)
+		defer f.debugController.deleteLocationSource(req.Definition.Source)
 	}
 	return f.FrontendLLBBridge.Solve(ctx, req, sid)
 }
@@ -170,8 +162,8 @@ type debugGatewayClient struct {
 func (c *debugGatewayClient) Solve(ctx context.Context, req gwclient.SolveRequest) (*gwclient.Result, error) {
 	req.Evaluate = true
 	if req.Definition != nil && req.Definition.Source != nil {
-		c.debugController.addLocation(req.Definition.Source)
-		defer c.debugController.deleteLocation(req.Definition.Source)
+		c.debugController.addLocationSource(req.Definition.Source)
+		defer c.debugController.deleteLocationSource(req.Definition.Source)
 	}
 	return c.Client.Solve(ctx, req)
 }
@@ -213,6 +205,7 @@ func (d *debugWorkerWrapper) WorkerRefByID(id string) (*worker.WorkerRef, bool) 
 }
 
 type status struct {
+	name   string
 	inputs []solver.Result
 	mounts []solver.Result
 	vertex digest.Digest
@@ -220,13 +213,14 @@ type status struct {
 	err    error
 }
 
-type registeredStatus struct {
-	debugID  string
-	inputIDs []string
-	mountIDs []string
-	vertex   digest.Digest
-	op       *pb.Op
-	err      error
+type RegisteredStatus struct {
+	Name     string
+	DebugID  string
+	InputIDs []string
+	MountIDs []string
+	Vertex   digest.Digest
+	Op       *pb.Op
+	Err      error
 }
 
 func (d *debugWorkerWrapper) notifyAndWait(ctx context.Context, s status) error {
@@ -244,13 +238,14 @@ func (d *debugWorkerWrapper) notifyAndWait(ctx context.Context, s status) error 
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case d.controller.eventCh <- &registeredStatus{
-		debugID:  id,
-		vertex:   s.vertex,
-		op:       s.op,
-		inputIDs: inputIDs,
-		mountIDs: mountIDs,
-		err:      s.err,
+	case d.controller.eventCh <- &RegisteredStatus{
+		Name:     s.name,
+		DebugID:  id,
+		Vertex:   s.vertex,
+		Op:       s.op,
+		InputIDs: inputIDs,
+		MountIDs: mountIDs,
+		Err:      s.err,
 	}:
 	}
 	select {
@@ -285,6 +280,20 @@ type debugOpWrapper struct {
 	worker *debugWorkerWrapper
 }
 
+func (o *debugOpWrapper) LoadCacheHook(ctx context.Context, inputs []solver.Result, outputs []solver.Result) {
+	logrus.Infof("CACHED %v", o.vertex.Name())
+	execInputs, execMounts := o.getResultMounts(inputs, outputs)
+	if err := o.worker.notifyAndWait(ctx, status{
+		name:   o.vertex.Name(),
+		inputs: execInputs,
+		mounts: execMounts,
+		vertex: o.vertex.Digest(),
+		op:     o.vertex.Sys().(*pb.Op),
+	}); err != nil {
+		logrus.WithError(err).Debugf("failed to notify cache event")
+	}
+}
+
 func (o *debugOpWrapper) Exec(ctx context.Context, g session.Group, inputs []solver.Result) (results []solver.Result, err error) {
 	var execInputs, execMounts []solver.Result
 
@@ -294,24 +303,11 @@ func (o *debugOpWrapper) Exec(ctx context.Context, g session.Group, inputs []sol
 		if errors.As(err, &ee) {
 			execInputs, execMounts = ee.Inputs, ee.Mounts
 		}
-	} else if execOp, ok := o.vertex.Sys().(*pb.Op).Op.(*pb.Op_Exec); ok {
-		execInputs = make([]solver.Result, len(execOp.Exec.Mounts))
-		for i, m := range execOp.Exec.Mounts {
-			if m.Input < 0 {
-				continue
-			}
-			execInputs[i] = inputs[m.Input].Clone()
-		}
-		execMounts = make([]solver.Result, len(execOp.Exec.Mounts))
-		copy(execMounts, execInputs)
-		for i, m := range execOp.Exec.Mounts {
-			if m.Output < 0 {
-				continue
-			}
-			execMounts[i] = outputs[m.Output].Clone()
-		}
+	} else {
+		execInputs, execMounts = o.getResultMounts(inputs, outputs)
 	}
 	if nErr := o.worker.notifyAndWait(ctx, status{
+		name:   o.vertex.Name(),
 		inputs: execInputs,
 		mounts: execMounts,
 		vertex: o.vertex.Digest(),
@@ -324,4 +320,36 @@ func (o *debugOpWrapper) Exec(ctx context.Context, g session.Group, inputs []sol
 	}
 
 	return outputs, err
+}
+
+func (o *debugOpWrapper) getResultMounts(inputs []solver.Result, outputs []solver.Result) (execInputs, execMounts []solver.Result) {
+	if execOp, ok := o.vertex.Sys().(*pb.Op).Op.(*pb.Op_Exec); ok {
+		execInputs = make([]solver.Result, len(execOp.Exec.Mounts))
+		for i, m := range execOp.Exec.Mounts {
+			if m.Input < 0 {
+				continue
+			}
+			if len(inputs) <= int(m.Input) {
+				logrus.Debugf("input %d is not provided (inputs len: %d)", m.Input, len(inputs))
+				continue
+			}
+			execInputs[i] = inputs[m.Input].Clone()
+		}
+		execMounts = make([]solver.Result, len(execOp.Exec.Mounts))
+		copy(execMounts, execInputs)
+		for i, m := range execOp.Exec.Mounts {
+			if m.Output < 0 {
+				continue
+			}
+			if len(outputs) <= int(m.Output) {
+				logrus.Debugf("output %d is not provided (outputs len: %d)", m.Output, len(outputs))
+				continue
+			}
+			execMounts[i] = outputs[m.Output].Clone()
+		}
+		return execInputs, execMounts
+	} else if len(outputs) == 1 {
+		return nil, outputs // If it has only one output, allow inspecting it by mounting this to the root dir.
+	}
+	return nil, nil
 }

@@ -19,12 +19,12 @@ func TestExec(t *testing.T) {
 	t.Parallel()
 	dt := fmt.Sprintf(`FROM %s
 RUN echo -n a > /a`, testutil.Mirror("busybox:1.32.0"))
-	fmt.Printf(dt)
+	fmt.Println(dt)
 	tmpCtx, doneTmpCtx := testutil.NewTempContext(t, dt)
 	defer doneTmpCtx()
 
-	sh := testutil.NewDebugShell(t, tmpCtx, testutil.WithOptions("--image="+testutil.Mirror("ubuntu:20.04")))
-	defer sh.Close()
+	sh := testutil.NewDebugShell(t, tmpCtx, testutil.WithOptions("--image="+testutil.Mirror("ubuntu:22.04")))
+	defer sh.Close(t)
 	sh.Do("next")
 	sh.Do(execNoTTY("cat /a")).OutEqual("a")
 	sh.Do(execNoTTY("--image cat /etc/os-release")).OutContains(`NAME="Ubuntu"`)
@@ -40,16 +40,49 @@ RUN echo -n a > /a`, testutil.Mirror("busybox:1.32.0"))
 	}
 }
 
+func TestExecNonRun(t *testing.T) {
+	t.Parallel()
+	dt := fmt.Sprintf(`FROM %s AS dev
+RUN echo -n hi > /a
+
+FROM %s
+COPY --from=dev /a /b
+RUN cat /b
+`, testutil.Mirror("busybox:1.32.0"), testutil.Mirror("busybox:1.32.0"))
+	fmt.Println(dt)
+	tmpCtx, doneTmpCtx := testutil.NewTempContext(t, dt)
+	defer doneTmpCtx()
+
+	sh := testutil.NewDebugShell(t, tmpCtx, testutil.WithOptions("--image="+testutil.Mirror("ubuntu:22.04")))
+	defer sh.Close(t)
+	sh.Do(execNoTTY("cat /a")).OutContains("process execution failed")
+	sh.Do("next")
+	sh.Do(execNoTTY("cat /a")).OutEqual("hi")
+	sh.Do("next")
+	sh.Do(execNoTTY("cat /a")).OutContains("process execution failed")
+	sh.Do(execNoTTY("cat /b")).OutEqual("hi")
+	sh.Do(execNoTTY("--image cat /etc/os-release")).OutContains(`NAME="Ubuntu"`)
+	sh.Do(execNoTTY("--image cat /debugroot/b")).OutEqual("hi")
+	sh.Do(execNoTTY("--image --mountroot=/testdebugroot/rootdir/ cat /testdebugroot/rootdir/b")).OutEqual("hi")
+	sh.Do(execNoTTY("--init-state cat /a")).OutContains("one rootfs mount must be specified")
+	sh.Do(execNoTTY("-e MSG=hello -e MSG2=world /bin/sh -c \"echo -n $MSG $MSG2\"")).OutEqual("hello world")
+	sh.Do(execNoTTY("--workdir /tmp /bin/sh -c \"echo -n $(pwd)\"")).OutEqual("/tmp")
+	sh.Do("c")
+	if err := sh.Wait(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestExecQuotes(t *testing.T) {
 	t.Parallel()
 	dt := fmt.Sprintf(`FROM %s
 RUN echo foo`, testutil.Mirror("busybox:1.32.0"))
-	fmt.Printf(dt)
+	fmt.Println(dt)
 	tmpCtx, doneTmpCtx := testutil.NewTempContext(t, dt)
 	defer doneTmpCtx()
 
 	sh := testutil.NewDebugShell(t, tmpCtx)
-	defer sh.Close()
+	defer sh.Close(t)
 	sh.Do("next")
 	sh.Do(execNoTTY(`echo -n "hello world"`)).OutEqual("hello world")
 	sh.Do(execNoTTY(`sh -c "echo -n \"hello world\""`)).OutEqual("hello world")
@@ -83,7 +116,7 @@ RUN --mount=type=secret,id=testsecret,target=/root/secret [ "$(cat /root/secret)
 
 	// test secret from file
 	sh := testutil.NewDebugShell(t, tmpCtx, testutil.WithOptions("--secret=id=testsecret,src="+tmpSec.Name()))
-	defer sh.Close()
+	defer sh.Close(t)
 	sh.Do("next")
 	sh.Do(execNoTTY("cat /root/secret")).OutEqual("test-secret")
 	sh.Do("c")
@@ -96,7 +129,7 @@ RUN --mount=type=secret,id=testsecret,target=/root/secret [ "$(cat /root/secret)
 		testutil.WithOptions("--secret=id=testsecret,env=TEST_SECRET"),
 		testutil.WithEnv("TEST_SECRET=test-secret"),
 	)
-	defer sh2.Close()
+	defer sh2.Close(t)
 	sh2.Do("next")
 	sh2.Do(execNoTTY("cat /root/secret")).OutEqual("test-secret")
 	sh2.Do("c")
@@ -199,7 +232,7 @@ RUN --mount=%s ssh-add -l | grep 2048 | grep RSA`,
 				testutil.Mirror("alpine:3.15.3"), tt.mountOption))
 			defer doneTmpCtx()
 			sh := testutil.NewDebugShell(t, tmpCtx, tt.buildgOptions(sockPath)...)
-			defer sh.Close()
+			defer sh.Close(t)
 			sh.Do("b 3")
 			sh.Do("c").OutContains("reached line: Dockerfile:3")
 			sh.Do(execNoTTY(`ssh-add -l | grep 2048 | grep RSA`)).OutContains("2048").OutContains("(RSA)")
@@ -238,7 +271,7 @@ RUN --mount=type=ssh,id=testsecret ssh-add -l | grep 2048 | grep RSA`,
 		t.Fatal(err)
 	}
 	sh2 := testutil.NewDebugShell(t, tmpCtx, testutil.WithOptions("--ssh=testsecret="+tmpSec.Name()))
-	defer sh2.Close()
+	defer sh2.Close(t)
 	sh2.Do("b 3")
 	sh2.Do("c")
 	sh2.Do(execNoTTY(`ssh-add -l | grep 2048 | grep RSA`)).OutContains("2048").OutContains("(RSA)")

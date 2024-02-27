@@ -1,5 +1,6 @@
 [[⬇️ **Download]**](https://github.com/ktock/buildg/releases)
 [[📖 **Command reference]**](#command-reference)
+[[🖥 **Use on IDEs]**](#use-on-ides)
 
 # buildg: Interactive debugger for Dockerfile
 
@@ -8,7 +9,7 @@
 - Source-level inspection
 - Breakpoints and step execution
 - Interactive shell on a step with your own debugigng tools
-- Based on BuildKit (needs unmerged patches)
+- Based on BuildKit (with unmerged patches)
 - Supports rootless
 
 **early stage software** This is implemented based on BuildKit with some unmerged patches. We're planning to upstream them.
@@ -19,116 +20,107 @@
 buildg debug /path/to/build/context
 ```
 
-To use your own image for debugging steps:
+The above command starts an interactive debugger session for debugging the Dockerfile in `/path/to/build/context`.
 
-```
-buildg debug --image=debugging-tools /path/to/build/context
-```
+For the detailed command refenrece, refer to [Command reference](#command-reference).
 
-For the detailed command refenrece, refer to [Command reference](#command-reference) in the following
-
-### Exmaple
+### Exmaple with terminal
 
 Debug the following Dockerfile:
 
 ```Dockerfile
-FROM busybox AS build1
+FROM ubuntu AS dev
 RUN echo hello > /hello
-
-FROM busybox AS build2
-RUN echo hi > /hi
+RUN echo world > /world
 
 FROM scratch
-COPY --from=build1 /hello /
-COPY --from=build2 /hi /
+COPY --from=dev /hello /
+COPY --from=dev /world /
 ```
 
 Store this Dockerfile to somewhere (e.g. `/tmp/ctx/Dockerfile`) then run `buildg debug`.
-`buildg.sh` can be used for rootless execution (discussed later).
 
 ```console
-$ buildg.sh debug --image=ubuntu:22.04 /tmp/ctx
-WARN[2022-05-17T09:01:16Z] using host network as the default            
-#1 [internal] load build definition from Dockerfile
-#1 transferring dockerfile: 195B done
-#1 DONE 0.1s
+$ buildg debug /tmp/ctx
+WARN[2022-09-20T20:11:49+09:00] using host network as the default
+#1 [internal] load .dockerignore
+#1 transferring context: 2B done
+#1 DONE 0.0s
 
-#2 [internal] load .dockerignore
-#2 transferring context: 2B done
-#2 DONE 0.1s
+#2 [internal] load build definition from Dockerfile
+#2 transferring dockerfile: 170B done
+#2 DONE 0.0s
 
-#3 [internal] load metadata for docker.io/library/busybox:latest
-INFO[2022-05-17T09:01:19Z] debug session started. type "help" for command reference. 
+#3 [internal] load metadata for docker.io/library/ubuntu:latest
+#3 ...
+
+#4 [auth] library/ubuntu:pull token for registry-1.docker.io
+#4 DONE 0.0s
+
+#3 [internal] load metadata for docker.io/library/ubuntu:latest
+#3 DONE 2.2s
+
+#5 [dev 1/3] FROM docker.io/library/ubuntu@sha256:20fa2d7bb4de7723f542be5923b06c4d704370f0390e4ae9e1c833c8785644c1
+#5 resolve docker.io/library/ubuntu@sha256:20fa2d7bb4de7723f542be5923b06c4d704370f0390e4ae9e1c833c8785644c1
+INFO[2022-09-20T20:11:52+09:00] CACHED [dev 1/3] FROM docker.io/library/ubuntu@sha256:20fa2d7bb4de7723f542be5923b06c4d704370f0390e4ae9e1c833c8785644c1 
+INFO[2022-09-20T20:11:52+09:00] debug session started. type "help" for command reference. 
 Filename: "Dockerfile"
- =>   1| FROM busybox AS build1
+ =>   1| FROM ubuntu AS dev
       2| RUN echo hello > /hello
-      3| 
- =>   4| FROM busybox AS build2
-      5| RUN echo hi > /hi
-      6| 
-      7| FROM scratch
-(buildg) break 5
-(buildg) breakpoints
-[0]: line: Dockerfile:5
-[on-fail]: breaks on fail
+      3| RUN echo world > /world
+      4| 
+(buildg) break 3
 (buildg) continue
-#3 DONE 3.2s
+#5 resolve docker.io/library/ubuntu@sha256:20fa2d7bb4de7723f542be5923b06c4d704370f0390e4ae9e1c833c8785644c1 0.0s done
+#5 DONE 0.0s
+INFO[2022-09-20T20:11:54+09:00] CACHED [dev 2/3] RUN echo hello > /hello     
+INFO[2022-09-20T20:11:54+09:00] detected 127.0.0.53 nameserver, assuming systemd-resolved, so using resolv.conf: /run/systemd/resolve/resolv.conf 
 
-#4 [build2 1/2] FROM docker.io/library/busybox@sha256:d2b53584f580310186df7a2055ce3ff83cc0df6caacf1e3489bff8cf5d0af5d8
-#4 resolve docker.io/library/busybox@sha256:d2b53584f580310186df7a2055ce3ff83cc0df6caacf1e3489bff8cf5d0af5d8 0.0s done
-#4 sha256:50e8d59317eb665383b2ef4d9434aeaa394dcd6f54b96bb7810fdde583e9c2d1 0B / 772.81kB 0.2s
-#4 sha256:50e8d59317eb665383b2ef4d9434aeaa394dcd6f54b96bb7810fdde583e9c2d1 772.81kB / 772.81kB 0.9s done
-Breakpoint[0]: reached line: Dockerfile:5
+#6 [dev 2/3] RUN echo hello > /hello
+#6 CACHED
+
+#7 [dev 3/3] RUN echo world > /world
+Breakpoint[0]: reached line: Dockerfile:3
 Filename: "Dockerfile"
+      1| FROM ubuntu AS dev
       2| RUN echo hello > /hello
-      3| 
-      4| FROM busybox AS build2
-*=>   5| RUN echo hi > /hi
-      6| 
-      7| FROM scratch
-      8| COPY --from=build1 /hello /
-(buildg) exec --image sh
-# cat /etc/os-release
-PRETTY_NAME="Ubuntu 22.04 LTS"
-NAME="Ubuntu"
-VERSION_ID="22.04"
-VERSION="22.04 LTS (Jammy Jellyfish)"
-VERSION_CODENAME=jammy
-ID=ubuntu
-ID_LIKE=debian
-HOME_URL="https://www.ubuntu.com/"
-SUPPORT_URL="https://help.ubuntu.com/"
-BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
-PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
-UBUNTU_CODENAME=jammy
-# ls /debugroot/
-bin  dev  etc  hi  home  proc  root  tmp  usr  var
-# cat /debugroot/hi
-hi
+*=>   3| RUN echo world > /world
+      4| 
+      5| FROM scratch
+      6| COPY --from=dev /hello /
+(buildg) exec
+# cat /hello /world
+hello
+world
 # 
 (buildg) quit
 ```
 
+## Use on IDEs
+
+Buildg allows visual and interactive debugging of Dockerfile on editors like VS Code, emacs and Neovim.
+This is provided throgh [DAP(Debug Adapter Protocol)](https://microsoft.github.io/debug-adapter-protocol/) supported by editors [(official list)](https://microsoft.github.io/debug-adapter-protocol/implementors/tools/).
+
+See [`./examples/dap/README.md`](./examples/dap/README.md) for usage of DAP.
+
+![Buildg on VS Code](./docs/images/vscode-dap.png)
+
 ## Install
 
-- Requirements
-  - [runc](https://github.com/opencontainers/runc)
-  - [OPTIONAL] [RootlessKit](https://github.com/rootless-containers/rootlesskit) and [slirp4netns](https://github.com/rootless-containers/slirp4netns) for rootless execution
+Binaries are available from https://github.com/ktock/buildg/releases
 
-### Release binaries
+Requirements:
 
-Available from https://github.com/ktock/buildg/releases
+- [runc](https://github.com/opencontainers/runc)
+- [OPTIONAL] [RootlessKit](https://github.com/rootless-containers/rootlesskit) and [slirp4netns](https://github.com/rootless-containers/slirp4netns) for rootless execution
 
-### Rootless mode
+They are included in our release tar `buildg-full-<version>-<os>-<arch>.tar.gz` but not included in `buildg-<version>-<os>-<arch>.tar.gz`.
 
-Install and use [`buildg.sh`](./extras/buildg.sh).
-[RootlessKit](https://github.com/rootless-containers/rootlesskit) and [slirp4netns](https://github.com/rootless-containers/slirp4netns) are needed.
+> NOTE1: Native execution is supported only on Linux as of now. On other platforms, please run buildg on Linux VM (e.g. [Lima](https://github.com/lima-vm/lima), etc)
 
-```
-$ buildg.sh debug /path/to/context
-```
+> NOTE2: [buildg on IDEs (VS Code, Emacs, Neovim, etc.)](./examples/dap/) requires rootless execution
 
-The doc in BuildKit project for troubleshooting: https://github.com/moby/buildkit/blob/master/docs/rootless.md#troubleshooting
+> NOTE3: For troubleshooting rootless mode, please see also the doc provided by BuildKit: https://github.com/moby/buildkit/blob/master/docs/rootless.md#troubleshooting
 
 ### Building binary using make
 
@@ -148,6 +140,38 @@ $ sudo make install
 ```
 $ nerdctl builder debug /path/to/build/context
 ```
+
+### Docker
+
+You can run buildg inside Docker.
+Images are available at [`ghcr.io/ktock/buildg`](https://github.com/ktock/buildg/pkgs/container/buildg).
+You need to bind mount the build context to the container.
+
+```
+$ docker run --rm -it --privileged -v /path/to/ctx:/ctx:ro ghcr.io/ktock/buildg:0.4 debug /ctx
+```
+
+You can also build this container image on the buildg repo.
+
+```
+$ docker build -t buildg .
+$ docker run --rm -it --privileged -v /path/to/ctx:/ctx:ro buildg debug /ctx
+```
+
+You can also use [bake command by Docker Buildx](https://docs.docker.com/engine/reference/commandline/buildx_bake/) to build the container:
+
+```
+docker buildx bake --set image-local.tags=buildg
+```
+
+> Tip: the volume at the buildg root enables to reuse cache among invocations and can speed up 2nd-time debugging.
+> 
+> ```
+> docker run --rm -it --privileged \
+>   -v buildg-cache:/var/lib/buildg \
+>   -v /path/to/ctx:/ctx:ro \
+>   buildg debug /ctx
+> ```
 
 ## Motivation
 
@@ -171,6 +195,11 @@ Leveraging the generic features added through the work, this project implements 
 <!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
 
 - [buildg debug](#buildg-debug)
+- [buildg prune](#buildg-prune)
+- [buildg du](#buildg-du)
+- [buildg dap serve](#buildg-dap-serve)
+- [buildg dap prune](#buildg-dap-prune)
+- [buildg dap du](#buildg-dap-du)
 - [Debug shell commands](#debug-shell-commands)
   - [break](#break)
   - [breakpoints](#breakpoints)
@@ -180,6 +209,8 @@ Leveraging the generic features added through the work, this project implements 
   - [continue](#continue)
   - [exec](#exec)
   - [list](#list)
+  - [log](#log)
+  - [reload](#reload)
   - [exit](#exit)
   - [help](#help)
 - [Global flags](#global-flags)
@@ -197,14 +228,56 @@ Flags:
 - `--file value`, `-f value`: Name of the Dockerfile
 - `--target value`: Target build stage to build.
 - `--build-arg value`: Build-time variables
-- `--oci-worker-net value`: Worker network type: "auto", "cni", "host" (default: "auto")
-- `--image value`: Image to use for debugging stage. Specify `--image` flag for [`exec`](#exec) command in debug shell when use this image.
+- `--image value`: Image to use for debugging stage. Specify `--image` flag for [`exec`](#exec) command in debug shell when use this image. See [`./docs/bringing-image.md`](./docs/bringing-image.md) for details.
 - `--secret value` : Secret value exposed to the build. Format: `id=secretname,src=filepath`
 - `--ssh value` : Allow forwarding SSH agent to the build. Format: `default|<id>[=<socket>|<key>[,<key>]]`
-- `--cache-reuse` : Reuse previously cached results. Useful for quickly debugging errored step. But breakpoints on cached steps are ignored (FIXME).
-- `--oci-cni-config-path value`: Path to CNI config file (default: "/etc/buildkit/cni.json")
-- `--oci-cni-binary-path value`: Path to CNI plugin binary dir (default: "/opt/cni/bin")
-- `--rootless`: Enable rootless configuration
+- `--cache-from value`: Import build cache from the specified location. e.g. `user/app:cache`, `type=local,src=path/to/dir` (see [`./docs/cache-from.md`](./docs/cache-from.md))
+- `--cache-reuse` : Reuse locally cached previous results (enabled by default). Sharing cache among parallel buildg processes isn't supported as of now.
+
+## buildg prune
+
+Prune cache
+
+Usage: `buildg prune [OPTIONS]`
+
+Flags:
+
+- `--all`: Prune including internal/frontend references
+
+## buildg du
+
+Show disk usage information
+
+Usage: `buildg du`
+
+## buildg dap serve
+
+Serve Debug Adapter Protocol (DAP) via stdio.
+Should be called from editors. 
+See [`./examples/dap/README.md`](./examples/dap/README.md) for usage of DAP.
+
+Usage: `buildg dap serve [OPTIONS]`
+
+Flags:
+- `--log-file value`: Path to the file to output logs
+
+## buildg dap prune
+
+Prune DAP cache.
+See [`./examples/dap/README.md`](./examples/dap/README.md) for usage of DAP.
+
+Usage: `buildg dap prune [OPTIONS]`
+
+Flags:
+
+- `--all`: Prune including internal/frontend references
+
+## buildg dap du
+
+Show disk usage of DAP cache
+See [`./examples/dap/README.md`](./examples/dap/README.md) for usage of DAP.
+
+Usage: `buildg dap du`
 
 ## Debug shell commands
 
@@ -253,16 +326,18 @@ Usage: `next`
 
 ### continue
 
-Proceed to the next breakpoint
+Proceed to the next or the specified breakpoint
 
 Alias: `c`
 
-Usage: `continue`
+Usage: `continue [BREAKPOINT_KEY]`
+
+Optional arg `BREAKPOINT_KEY` is the key of a breakpoint until which continue the build.
+Use `breakpoints` command to list all registered breakpoints.
 
 ### exec
 
 Execute command in the step.
-Only supported on RUN instructions as of now.
 
 Alias: `e`
 
@@ -272,7 +347,7 @@ If `ARGS` isn't provided, `/bin/sh` is used by default.
 
 Flags:
 
-- `--image`: Execute command in the debuger image specified by `--image` flag of [`buildg debug`](#buildg-debug). If not specified, the command is executed on the rootfs of the current step.
+- `--image`: Execute command in the debuger image specified by `--image` flag of [`buildg debug`](#buildg-debug). If not specified, the command is executed on the rootfs of the current step.  See [`./docs/bringing-image.md`](./docs/bringing-image.md) for details.
 - `--mountroot value`: Mountpoint to mount the rootfs of the step. ignored if `--image` isn't specified. (default: `/debugroot`)
 - `--init-state`: Execute commands in an initial state of that step (experimental)
 - `--tty`, `-t`: Allocate tty (enabled by default)
@@ -295,6 +370,23 @@ Flags:
 - `-B value`: Print the specified number of lines before the current line (default: 3)
 - `--range value`: Print the specified number of lines before and after the current line (default: 3)
 
+### log
+
+Show build log
+
+Usage: `log [OPTIONS]`
+
+Flags:
+- `-n value`: Print recent n lines (default: 10)
+- `--all`, `-a`: show all lines
+- `--more`: show buffered and unread lines
+
+### reload
+
+Reload context and restart build
+
+Usage: `reload`
+
 ### exit
 
 Exit command
@@ -314,3 +406,13 @@ Usage: `help [COMMAND]`
 ## Global flags
 
 - `--root` : Path to the root directory for storing data (e.g. "/var/lib/buildg").
+- `--oci-worker-snapshotter value`: Worker snapshotter: "auto", "overlayfs", "native" (default: "auto")
+- `--oci-worker-net value`: Worker network type: "auto", "cni", "host" (default: "auto")
+- `--oci-cni-config-path value`: Path to CNI config file (default: "/etc/buildkit/cni.json")
+- `--oci-cni-binary-path value`: Path to CNI plugin binary dir (default: "/opt/cni/bin")
+- `--rootlesskit-args`: Change arguments for rootlesskit in JSON format [`BUILDG_ROOTLESSKIT_ARGS`]
+
+# Additional documents
+
+- [`./docs/cache-from.md`](./docs/cache-from.md): Inspecting remotely cached build using `--cache-from` flag.
+- [`./docs/bringing-image.md`](./docs/bringing-image.md): Bringging your own image for debugging instructions using `--image` flag.
